@@ -6,30 +6,51 @@
 
 #[macro_use]
 extern crate lazy_static;
-extern crate uuid;
-
-use uuid::Uuid;
 
 use std::thread;
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::iter::FromIterator;
+
+use std::cell::RefCell;
 
 use std::sync::Mutex;
 
-use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
-use std::marker::PhantomData;
+use std::cell::UnsafeCell;
 
-/*
+#[derive(PartialEq, Eq, Hash, Clone)]
+struct CownAddress ( *const () );
+unsafe impl Send for CownAddress {}
+unsafe impl Sync for CownAddress {}
+
+type Behaviour = Box<dyn FnOnce() + Send + 'static>;
+
+struct Pending {
+    required: HashSet<CownAddress>,
+    behaviour: Behaviour,
+}
+impl Pending {
+    fn new(required: &[CownAddress], behaviour: Behaviour) -> Pending {
+        Pending {
+            required: HashSet::from_iter(required.iter().cloned()),
+            behaviour: behaviour,
+        }
+    }
+}
+
 struct Scheduler {
-    cowns: HashMap<Cown, i64>,
-//    behaviours: VecDeque<Pending>,
+    available: HashSet<CownAddress>,
+    pending: VecDeque<Pending>,
+    handles: VecDeque<thread::JoinHandle<()>>,
 }
 impl Scheduler {
-    pub fn new() -> Scheduler {
+    fn new() -> Scheduler {
         Scheduler {
-            cowns: HashMap::new(),
-//            behaviours: VecDeque::new(),
+            available: HashSet::new(),
+            pending: VecDeque::new(),
+            handles: VecDeque::new(),
         }
     }
 }
@@ -38,94 +59,115 @@ lazy_static! {
     static ref SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
 }
 
-pub fn when<F: 'static>(cown: &Cown, f: F) where F: FnOnce(&mut i64) + Send {
-    let thread = match SCHEDULER.lock() {
+fn register(cown: CownAddress) {
+    match SCHEDULER.lock() {
         Ok(mut scheduler) => {
-            let mut resource = match scheduler.cowns.remove(&cown) {
-                Some(resource) => { resource }
-                None => { panic!("Failed to get resource") }
-            };
-            let clone = Cown::clone(&cown);
-            thread::spawn(move || 
-                {
-                    f(&mut resource);
-                    match SCHEDULER.lock() {
-                        Ok(mut scheduler) => {
-                            scheduler.cowns.insert(clone, resource);
+            scheduler.available.insert(cown);
+        }
+        Err(_) => panic!("Failed to lock scheduler")
+    };
+}
+
+fn free(cowns: HashSet<CownAddress>) {
+    match SCHEDULER.lock() {
+        Ok(mut scheduler) => {
+            scheduler.available.extend(cowns);
+        }
+        Err(_) => panic!("Failed to lock scheduler")
+    };
+    signal();
+}
+
+fn schedule(required: &[CownAddress], behaviour: Behaviour) {
+    match SCHEDULER.lock() {
+        Ok(mut scheduler) => {
+            scheduler.pending.push_back(Pending::new(&required, behaviour));
+        }
+        Err(_) => panic!("Failed to lock scheduler")
+    };
+    signal();
+}
+
+fn signal() {
+    match SCHEDULER.lock() {
+        Ok(mut scheduler) => {
+            let index = scheduler.pending.iter().position(|pending| 
+                            pending.required.is_subset(&scheduler.available));
+            match index {
+                Some(index) => {
+                    match scheduler.pending.remove(index) {
+                        Some(pending) => {
+                            for addr in &pending.required {
+                                scheduler.available.remove(addr);
+                            }
+                            let required = pending.required;
+                            let behaviour = pending.behaviour;
+                            scheduler.handles.push_back(thread::spawn(|| { 
+                                behaviour();
+                                free(required);
+                            }))
                         }
-                        Err(_) => panic!("Failed to return resource")
+                        None => {}
                     }
                 }
-            )
+                None => {}
+            }
         }
-        Err(_) => panic!("Failed to schedule behaviour")
+        Err(_) => panic!("Failed to lock scheduler")
     };
-    thread.join().unwrap();
 }
 
-pub struct Cown {
-    identifier: uuid::Uuid,
-}
-impl Cown {
-    pub fn create(resource: i64) -> Cown {
-        let uuid = Uuid::new_v4();
-        let cown = Cown { identifier: uuid };
-        match SCHEDULER.lock() {
+fn end() {
+    while true {
+        let handle = match SCHEDULER.lock() {
             Ok(mut scheduler) => {
-                scheduler.cowns.insert(Cown::clone(&cown), resource);
-                cown
+                scheduler.handles.pop_front()
             }
-            Err(_) => panic!("Failed to allocate cown")
+            Err(_) => panic!("Failed to lock scheduler")
+        };
+        match handle {
+            Some(handle) => { handle.join(); }
+            None => { return; }
         }
     }
 }
-impl PartialEq for Cown {
-    fn eq(&self, other: &Cown) -> bool { self.identifier == other.identifier }
-}
-impl Eq for Cown{}
-impl Hash for Cown {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.identifier.hash(state);
-    }
-}
-impl Clone for Cown {
-    fn clone(&self) -> Cown {
-        Cown { identifier: self.identifier }
-    }
-}
-*/
 
 struct Cown<T> {
-    identifier: uuid::Uuid,
-    phantom: PhantomData<T>,
+    data: RefCell<T>, // UnsafeCell
 }
-impl <T> Cown<T> {
-    pub fn create(resource: T) -> Cown<T> {
-        let uuid = Uuid::new_v4();
-        let cown = Cown { identifier: uuid };
-    //    match SCHEDULER.lock() {
-    //        Ok(mut scheduler) => {
-    //            scheduler.cowns.insert(Cown::clone(&cown), resource);
-    //            cown
-    //        }
-    //        Err(_) => panic!("Failed to allocate cown")
-    //    }
+impl <T: Send> Cown<T> where {
+    pub fn create(data: T) -> Arc<Cown<T>> {
+        let cown = Arc::new(Cown { data: RefCell::new(data) });
+        register(Cown::address(&cown));
+        cown
+    }
+
+    fn address(cown: &Arc<Cown<T>>) -> CownAddress {
+        CownAddress (&**cown as *const Cown<T> as *const ())
     }
 }
+unsafe impl <T> Send for Cown<T> {}
+unsafe impl <T> Sync for Cown<T> {}
 
 pub trait When<F> {
     fn when(&self, f: F);
 }
 
-impl <T, F> When<F> for (Cown<T>) where F: FnOnce(&mut T) + Send {
+impl <T: Send + 'static, F: FnOnce(&mut T) + Send + 'static> When<F> for Arc<Cown<T>> {
     fn when(&self, f: F) {
-
+        let cown = Arc::clone(&self);
+        let behaviour = Box::new(move || { f(&mut cown.data.borrow_mut()); });
+        schedule(&[Cown::address(self)], behaviour);
     }
 }
 
-impl <T, U, F> When<F> for (Cown<T>, Cown<U>) where F: FnOnce(&mut T, &mut U) + Send {
+impl <T: Send + 'static, U: Send + 'static, F: FnOnce(&mut T, &mut U) + Send + 'static> 
+    When<F> for (Arc<Cown<T>>, Arc<Cown<U>>) {
     fn when(&self, f: F) {
-
+        let (c1 , c2) = (Arc::clone(&self.0), Arc::clone(&self.1));
+        let behaviour = Box::new(move ||
+            { f(&mut c1.data.borrow_mut(), &mut c2.data.borrow_mut()); });
+        schedule(&[Cown::address(&self.0), Cown::address(&self.1)], behaviour);
     }
 }
 
@@ -133,12 +175,21 @@ fn main() {
     let c1 = Cown::create(1);
     let c2 = Cown::create(2);
 
+    (c1).when(|c1| {
+        *c1 = *c1 + 1;
+    });
+
+    (c1).when(|c1| {
+        println!("c1 is: {}", c1);
+    });
+
+    (c2).when(|c2| {
+        println!("c2 is: {}", c2);
+    });
+
     (c1, c2).when(|c1, c2| {
+        println!("c1 + c2 is: {}", *c1 + *c2);
+    });
 
-   });
-
-    //when(&f1, |x| *x = *x + 1);
-
-
-//    when(&f1, |x| println!("x is: {}", x));
+    end();
 }
