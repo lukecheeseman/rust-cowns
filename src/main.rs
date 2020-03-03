@@ -276,7 +276,7 @@ impl Phil {
     }
 
     fn eat(mut self) {
-        (&self.left.clone(), &self.right.clone()).when(move |left, right| {
+        (&self.left.clone(), &self.right.clone()).when(|left, right| {
             self.hunger = self.hunger - 1;
             left.eat();
             right.eat();
