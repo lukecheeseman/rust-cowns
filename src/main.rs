@@ -31,8 +31,15 @@ struct Pending {
 }
 impl Pending {
     fn new(required: &[CownAddress], behaviour: Behaviour) -> Pending {
+        let mut addresses = HashSet::new();
+        for address in required.iter().cloned() {
+            if addresses.contains(&address) {
+                panic!("Scheduling behaviour requires aliasing cowns");
+            }
+            addresses.insert(address);
+        }
         Pending {
-            required: HashSet::from_iter(required.iter().cloned()),
+            required: addresses,
             behaviour: behaviour,
         }
     }
@@ -271,6 +278,10 @@ impl Phil {
     }
 
     fn eat(mut self) {
+//        when(&self.left, &self.right).do(|left, right| {
+//
+//        });
+
         (&self.left.clone(), &self.right.clone()).when(|left, right| {
             println!("Phil {} eats", self.id);
             self.hunger = self.hunger - 1;
@@ -286,7 +297,6 @@ impl Phil {
 }
 
 fn main() {
-    /*
     // straight-forward example
     let c1 = Cown::create(1);
     let c2 = Cown::create(2);
@@ -305,14 +315,12 @@ fn main() {
 
     (&c1, &c2).when(|c1, c2| {
         println!("c1 + c2 is: {}", *c1 + *c2);
-    });*/
+    });
 
     // broken example
-    /*
-    (c1.clone(), c1).when(|c1, c4| {
-        println!("c1 is: {}", c1);
-    });
-    */
+    // (&c1.clone(), &c1).when(|c1, c4| {
+    //    println!("c1 is: {}", *c1 + *c4);
+    // });
 
     // Dining Phils (Wadler, Jupitus, Mitchell, Seymour Hoffman, Glass)
 
