@@ -171,13 +171,20 @@ impl <T> Clone for Cown<T> {
 
 #[macro_export]
 macro_rules! when {
-    () => {{ () }};
-    ( $c:expr) => {{ ($c.clone()) }};
     ( $( $cs:expr ),* ) => {{ ( ( $( $cs.clone() ),* ) ) }};
 }
 
 pub trait Run<F> {
     fn run(&self, function: F);
+}
+impl <F: FnOnce() + Send + 'static>
+    Run<F> for () {
+    fn run(&self, f: F) {
+        let behaviour = Box::new(move || {
+            f();
+        });
+        schedule(&[], behaviour);
+    }
 }
 impl <T: Send + 'static, F: FnOnce(&mut T) + Send + 'static>
     Run<F> for Cown<T> {
@@ -186,20 +193,18 @@ impl <T: Send + 'static, F: FnOnce(&mut T) + Send + 'static>
         let behaviour = Box::new(move || {
             f(resource.get());
         });
-        let address = &[Cown::address(&self)];
-        schedule(address, behaviour);
+        schedule(&[Cown::address(&self)], behaviour);
     }
 }
 
-impl <T: Send + 'static, U: Send + 'static, F: FnOnce(&mut T, &mut U) + Send + 'static>
-    Run<F> for (Cown<T>, Cown<U>) {
+impl <T1: Send + 'static, T2: Send + 'static, F: FnOnce(&mut T1, &mut T2) + Send + 'static>
+    Run<F> for (Cown<T1>, Cown<T2>) {
     fn run(&self, f: F) {
         let (r1, r2) = (self.0.resource.clone(), self.1.resource.clone());
         let behaviour = Box::new(move || {
             f(r1.get(), r2.get());
         });
-        let address = &[Cown::address(&self.0), Cown::address(&self.1)];
-        schedule(address, behaviour);
+        schedule(&[Cown::address(&self.0), Cown::address(&self.1)], behaviour);
     }
 }
 
@@ -213,9 +218,8 @@ impl <T: Send + 'static, U: Send + 'static, V: Send + 'static, W: Send + 'static
         let behaviour = Box::new(move || {
             f(r1.get(), r2.get(), r3.get(), r4.get(), r5.get());
         });
-        let address = &[Cown::address(&self.0), Cown::address(&self.1),
-                        Cown::address(&self.2), Cown::address(&self.3),
-                        Cown::address(&self.4)];
-        schedule(address, behaviour);
+        schedule(&[Cown::address(&self.0), Cown::address(&self.1),
+                   Cown::address(&self.2), Cown::address(&self.3),
+                   Cown::address(&self.4)], behaviour);
     }
 }

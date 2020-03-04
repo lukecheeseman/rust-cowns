@@ -34,7 +34,7 @@ impl Table {
         when!(table).run(|table| {
             table.count = table.count - 1;
             if table.count == 0 {
-                when!(&table.f1, &table.f2, &table.f3, &table.f4, &table.f5).run(|f1, f2, f3, f4, f5| {
+                when!(table.f1, table.f2, table.f3, table.f4, table.f5).run(|f1, f2, f3, f4, f5| {
                     println!("f1: {}", f1.count);
                     println!("f2: {}", f2.count);
                     println!("f3: {}", f3.count);
@@ -60,7 +60,7 @@ impl Phil {
     }
 
     fn eat(mut self) {
-        when!(&self.left, &self.right).run(|left, right| {
+        when!(self.left, self.right).run(|left, right| {
             println!("Phil {} eats", self.id);
             self.hunger = self.hunger - 1;
             left.eat();
@@ -125,5 +125,6 @@ fn main() {
     p4.eat();
     p5.eat();
 
+    // THIS WILDLY IMPORTANT FUNCTION THAT MEANS YOU EXAMPLE PROBABLY FINISHES
     end();
 }
