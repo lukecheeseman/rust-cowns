@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::iter::FromIterator;
 
-use std::cell::RefCell;
+use std::cell::UnsafeCell;
 
 use std::sync::Mutex;
 
@@ -130,92 +130,86 @@ fn end() {
     }
 }
 
+struct Resource<T> ( UnsafeCell<T> );
+impl <T: Send> Resource<T> {
+    fn new(resource: T) -> Resource<T> {
+        Resource ( UnsafeCell::new(resource) )
+    }
+
+    fn get(&self) -> &mut T {
+        unsafe {
+            match self.0.get().as_mut() {
+                Some(value) => value,
+                None => panic!("Empty Resource"),
+            }
+        }
+    }
+}
+unsafe impl <T> Send for Resource<T> {}
+unsafe impl <T> Sync for Resource<T> {}
+
 struct Cown<T> {
-    data: RefCell<T>, // UnsafeCell
+    resource: Arc<Resource<T>>,
 }
 impl <T: Send> Cown<T> where {
-    pub fn create(data: T) -> Arc<Cown<T>> {
-        let cown = Arc::new(Cown { data: RefCell::new(data) });
+    pub fn create(resource: T) -> Cown<T> {
+        let cown = Cown { resource: Arc::new(Resource::new(resource)) };
         register(Cown::address(&cown));
         cown
     }
 
-    fn address(cown: &Arc<Cown<T>>) -> CownAddress {
-        CownAddress (&**cown as *const Cown<T> as *const ())
+    fn address(cown: &Cown<T>) -> CownAddress {
+        CownAddress (&*cown.resource as *const Resource<T> as *const ())
     }
 }
 unsafe impl <T> Send for Cown<T> {}
 unsafe impl <T> Sync for Cown<T> {}
+impl <T> Clone for Cown<T> {
+    fn clone(&self) -> Cown<T> {
+        Cown { resource: self.resource.clone() }
+    }
+}
 
 pub trait When<F> {
     fn when(&self, f: F);
 }
 
-impl <T: Send + 'static, F: FnOnce(&mut T) + Send + 'static> When<F> for &Arc<Cown<T>> {
+impl <T: Send + 'static, F: FnOnce(&mut T) + Send + 'static>
+    When<F> for &Cown<T> {
     fn when(&self, f: F) {
-        let cown = Arc::clone(self);
-        let behaviour = Box::new(move || { f(&mut cown.data.borrow_mut()); });
+        let resource = self.resource.clone();
+        let behaviour = Box::new(move || {
+            f(resource.get());
+        });
         schedule(&[Cown::address(self)], behaviour);
     }
 }
 
 impl <T: Send + 'static, U: Send + 'static, F: FnOnce(&mut T, &mut U) + Send + 'static> 
-    When<F> for (&Arc<Cown<T>>, &Arc<Cown<U>>) {
+    When<F> for (&Cown<T>, &Cown<U>) {
     fn when(&self, f: F) {
-        let (c1 , c2) = (Arc::clone(self.0), Arc::clone(self.1));
-        let behaviour = Box::new(move ||
-            { f(&mut c1.data.borrow_mut(), &mut c2.data.borrow_mut()); });
+        let (r1 , r2) = (self.0.resource.clone(), self.1.resource.clone());
+        let behaviour = Box::new(move || {
+            f(r1.get(), r2.get());
+        });
         schedule(&[Cown::address(&self.0), Cown::address(&self.1)], behaviour);
-    }
-}
-
-impl <T: Send + 'static, U: Send + 'static, V: Send + 'static,
-     F: FnOnce(&mut T, &mut U, &mut V) + Send + 'static> 
-    When<F> for (&Arc<Cown<T>>, &Arc<Cown<U>>, &Arc<Cown<V>>) {
-    fn when(&self, f: F) {
-        let (c1 , c2, c3) = (Arc::clone(&self.0), Arc::clone(&self.1), Arc::clone(&self.2));
-        let behaviour = Box::new(move ||
-            { f(&mut c1.data.borrow_mut(), 
-                &mut c2.data.borrow_mut(),
-                &mut c3.data.borrow_mut()); });
-        schedule(&[Cown::address(&self.0), Cown::address(&self.1), Cown::address(&self.2)], 
-                 behaviour);
-    }
-}
-
-impl <T: Send + 'static, U: Send + 'static, V: Send + 'static, W: Send + 'static,
-     F: FnOnce(&mut T, &mut U, &mut V, &mut W) + Send + 'static> 
-    When<F> for (&Arc<Cown<T>>, &Arc<Cown<U>>, &Arc<Cown<V>>, &Arc<Cown<W>>) {
-    fn when(&self, f: F) {
-        let (c1 , c2, c3, c4) = (Arc::clone(&self.0), Arc::clone(&self.1),
-                                 Arc::clone(&self.2), Arc::clone(&self.3));
-        let behaviour = Box::new(move ||
-            { f(&mut c1.data.borrow_mut(), 
-                &mut c2.data.borrow_mut(),
-                &mut c3.data.borrow_mut(),
-                &mut c4.data.borrow_mut()); });
-        schedule(&[Cown::address(&self.0), Cown::address(&self.1),
-                   Cown::address(&self.2), Cown::address(&self.3)], 
-                 behaviour);
     }
 }
 
 impl <T: Send + 'static, U: Send + 'static, V: Send + 'static, W: Send + 'static,
       X: Send + 'static, F: FnOnce(&mut T, &mut U, &mut V, &mut W, &mut X) + Send + 'static> 
-    When<F> for (&Arc<Cown<T>>, &Arc<Cown<U>>, &Arc<Cown<V>>, &Arc<Cown<W>>, &Arc<Cown<X>>) {
+    When<F> for (&Cown<T>, &Cown<U>, &Cown<V>, &Cown<W>, &Cown<X>) {
     fn when(&self, f: F) {
-        let (c1 , c2, c3, c4, c5) = (Arc::clone(self.0), Arc::clone(self.1),
-                                 Arc::clone(self.2), Arc::clone(self.3),
-                                 Arc::clone(self.4));
-        let behaviour = Box::new(move ||
-            { f(&mut c1.data.borrow_mut(), 
-                &mut c2.data.borrow_mut(),
-                &mut c3.data.borrow_mut(),
-                &mut c4.data.borrow_mut(),
-                &mut c5.data.borrow_mut()); });
-        schedule(&[Cown::address(self.0), Cown::address(self.1),
-                   Cown::address(self.2), Cown::address(self.3),
-                   Cown::address(self.4)], 
+        let (r1 , r2, r3, r4, r5) = 
+            (self.0.resource.clone(), self.1.resource.clone(), 
+             self.2.resource.clone(), self.3.resource.clone(),
+             self.4.resource.clone());
+        let behaviour = Box::new(move || {
+            f(r1.get(), r2.get(), r3.get(), r4.get(), r5.get());
+        });
+        schedule(&[Cown::address(&self.0), Cown::address(&self.1),
+                   Cown::address(&self.2), Cown::address(&self.3),
+                   Cown::address(&self.4)], 
                  behaviour);
     }
 }
@@ -235,20 +229,19 @@ impl Fork {
 
 struct Table {
     count: u64,
-    f1: Arc<Cown<Fork>>,
-    f2: Arc<Cown<Fork>>,
-    f3: Arc<Cown<Fork>>,
-    f4: Arc<Cown<Fork>>,
-    f5: Arc<Cown<Fork>>,
+    f1: Cown<Fork>,
+    f2: Cown<Fork>,
+    f3: Cown<Fork>,
+    f4: Cown<Fork>,
+    f5: Cown<Fork>,
 }
 impl Table {
-    fn new(f1: &Arc<Cown<Fork>>, f2: &Arc<Cown<Fork>>, f3: &Arc<Cown<Fork>>,
-           f4: &Arc<Cown<Fork>>, f5: &Arc<Cown<Fork>>) -> Table {
-        Table { count: 5, f1: f1.clone(), f2: f2.clone(), f3: f3.clone(), 
-                f4: f4.clone(), f5: f5.clone() }
+    fn new(f1: Cown<Fork>, f2: Cown<Fork>, f3: Cown<Fork>,
+           f4: Cown<Fork>, f5: Cown<Fork>) -> Table {
+        Table { count: 5, f1: f1, f2: f2, f3: f3, f4: f4, f5: f5 }
     }
 
-    fn leave(table: Arc<Cown<Table>>) {
+    fn leave(table: &Cown<Table>) {
         (&table).when(|table| {
             table.count = table.count - 1;
             if table.count == 0 {
@@ -265,32 +258,36 @@ impl Table {
 }
 
 struct Phil {
+    id: u64,
     hunger: u64,
-    left: Arc<Cown<Fork>>,
-    right: Arc<Cown<Fork>>,
-    table: Arc<Cown<Table>>,
+    left: Cown<Fork>,
+    right: Cown<Fork>,
+    table: Cown<Table>,
 }
 impl Phil {
-    fn new(left: &Arc<Cown<Fork>>, right: &Arc<Cown<Fork>>, table: &Arc<Cown<Table>>) -> Phil {
-        Phil { hunger: 10, left: left.clone(), right: right.clone(), table: table.clone() }
+    fn new(id: u64, left: Cown<Fork>,right: Cown<Fork>, table: Cown<Table>)
+            -> Phil {
+        Phil { id: id, hunger: 10, left: left, right: right, table: table }
     }
 
     fn eat(mut self) {
         (&self.left.clone(), &self.right.clone()).when(|left, right| {
+            println!("Phil {} eats", self.id);
             self.hunger = self.hunger - 1;
             left.eat();
             right.eat();
             if self.hunger > 0 {
                 self.eat();
             } else {
-                Table::leave(self.table);
+                Table::leave(&self.table);
             }
         });
     }
 }
 
 fn main() {
-    /* straight-forward example
+    /*
+    // straight-forward example
     let c1 = Cown::create(1);
     let c2 = Cown::create(2);
 
@@ -308,13 +305,16 @@ fn main() {
 
     (&c1, &c2).when(|c1, c2| {
         println!("c1 + c2 is: {}", *c1 + *c2);
-    });
+    });*/
 
     // broken example
+    /*
     (c1.clone(), c1).when(|c1, c4| {
         println!("c1 is: {}", c1);
     });
     */
+
+    // Dining Phils (Wadler, Jupitus, Mitchell, Seymour Hoffman, Glass)
 
     let f1 = Cown::create(Fork::new());
     let f2 = Cown::create(Fork::new());
@@ -322,13 +322,14 @@ fn main() {
     let f4 = Cown::create(Fork::new());
     let f5 = Cown::create(Fork::new());
 
-    let table = Cown::create(Table::new(&f1, &f2, &f3, &f4, &f5));
+    let table = Cown::create(Table::new(f1.clone(), f2.clone(), f3.clone(),
+                                        f4.clone(), f5.clone()));
 
-    let p1 = Phil::new(&f1, &f2, &table);
-    let p2 = Phil::new(&f2, &f3, &table);
-    let p3 = Phil::new(&f3, &f4, &table);
-    let p4 = Phil::new(&f4, &f5, &table);
-    let p5 = Phil::new(&f5, &f1, &table);
+    let p1 = Phil::new(1, f1.clone(), f2.clone(), table.clone());
+    let p2 = Phil::new(2, f2.clone(), f3.clone(), table.clone());
+    let p3 = Phil::new(3, f3.clone(), f4.clone(), table.clone());
+    let p4 = Phil::new(4, f4.clone(), f5.clone(), table.clone());
+    let p5 = Phil::new(5, f5.clone(), f1.clone(), table.clone());
 
     p1.eat();
     p2.eat();
