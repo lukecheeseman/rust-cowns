@@ -208,9 +208,9 @@ impl <T1: Send + 'static, T2: Send + 'static, F: FnOnce(&mut T1, &mut T2) + Send
     }
 }
 
-impl <T: Send + 'static, U: Send + 'static, V: Send + 'static, W: Send + 'static,
-      X: Send + 'static, F: FnOnce(&mut T, &mut U, &mut V, &mut W, &mut X) + Send + 'static>
-    Run<F> for (Cown<T>, Cown<U>, Cown<V>, Cown<W>, Cown<X>) {
+impl <T1: Send + 'static, T2: Send + 'static, T3: Send + 'static, T4: Send + 'static,
+      T5: Send + 'static, F: FnOnce(&mut T1, &mut T2, &mut T3, &mut T4, &mut T5) + Send + 'static>
+    Run<F> for (Cown<T1>, Cown<T2>, Cown<T3>, Cown<T4>, Cown<T5>) {
     fn run(&self, f: F) {
         let (r1, r2, r3, r4, r5) = (self.0.resource.clone(), self.1.resource.clone(),
                                     self.2.resource.clone(), self.3.resource.clone(),
