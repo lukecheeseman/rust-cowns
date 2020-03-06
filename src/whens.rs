@@ -177,49 +177,63 @@ macro_rules! when {
 pub trait Run<F> {
     fn run(&self, function: F);
 }
-impl <F: FnOnce() + Send + 'static>
-    Run<F> for () {
-    fn run(&self, f: F) {
-        let behaviour = Box::new(move || {
-            f();
-        });
-        schedule(&[], behaviour);
-    }
-}
-impl <T: Send + 'static, F: FnOnce(&mut T) + Send + 'static>
-    Run<F> for Cown<T> {
-    fn run(&self, f: F) {
-        let resource = self.resource.clone();
-        let behaviour = Box::new(move || {
-            f(resource.get());
-        });
-        schedule(&[Cown::address(&self)], behaviour);
-    }
+
+macro_rules! impl_run_tuple {
+    () => (
+        impl <Be: FnOnce() + Send + 'static>
+            Run<Be> for () {
+            fn run(&self, b: Be) {
+                let behaviour = Box::new(move || {
+                    b();
+                });
+                schedule(&[], behaviour);
+            }
+        }
+    );
+
+    ( $name:ident ) => (
+        impl<$name: Send + 'static, Be: FnOnce( &mut $name ) + Send +'static>
+            Run<Be> for Cown<$name> {
+            #[allow(non_snake_case)]
+            fn run(&self, b: Be) {
+                let ref $name = self;
+                let addresses = &[ Cown::address( $name ) ];
+                let $name = $name.resource.clone();
+                let behaviour = Box::new(move || {
+                    b($name.get());
+                });
+                schedule(addresses, behaviour);
+            }
+        }
+    );
+
+    ( $($name:ident)+ ) => (
+        impl<$($name: Send + 'static),+, Be: FnOnce( $(&mut $name),+ ) + Send +'static>
+            Run<Be> for ($(Cown<$name>,)+) {
+            #[allow(non_snake_case)]
+            fn run(&self, b: Be) {
+                let ( $(ref $name,)+ ) = self;
+                let addresses = &[ $( Cown::address( $name ) , )+ ];
+                let ( $($name,)+ ) = ( $($name.resource.clone(),)+ );
+                let behaviour = Box::new(move || {
+                    b($($name.get(),)+ );
+                });
+                schedule(addresses, behaviour);
+            }
+        }
+    );
 }
 
-impl <T1: Send + 'static, T2: Send + 'static, F: FnOnce(&mut T1, &mut T2) + Send + 'static>
-    Run<F> for (Cown<T1>, Cown<T2>) {
-    fn run(&self, f: F) {
-        let (r1, r2) = (self.0.resource.clone(), self.1.resource.clone());
-        let behaviour = Box::new(move || {
-            f(r1.get(), r2.get());
-        });
-        schedule(&[Cown::address(&self.0), Cown::address(&self.1)], behaviour);
-    }
-}
-
-impl <T1: Send + 'static, T2: Send + 'static, T3: Send + 'static, T4: Send + 'static,
-      T5: Send + 'static, F: FnOnce(&mut T1, &mut T2, &mut T3, &mut T4, &mut T5) + Send + 'static>
-    Run<F> for (Cown<T1>, Cown<T2>, Cown<T3>, Cown<T4>, Cown<T5>) {
-    fn run(&self, f: F) {
-        let (r1, r2, r3, r4, r5) = (self.0.resource.clone(), self.1.resource.clone(),
-                                    self.2.resource.clone(), self.3.resource.clone(),
-                                    self.4.resource.clone());
-        let behaviour = Box::new(move || {
-            f(r1.get(), r2.get(), r3.get(), r4.get(), r5.get());
-        });
-        schedule(&[Cown::address(&self.0), Cown::address(&self.1),
-                   Cown::address(&self.2), Cown::address(&self.3),
-                   Cown::address(&self.4)], behaviour);
-    }
-}
+impl_run_tuple! {}
+impl_run_tuple! { A }
+impl_run_tuple! { A B }
+impl_run_tuple! { A B C }
+impl_run_tuple! { A B C D }
+impl_run_tuple! { A B C D E }
+impl_run_tuple! { A B C D E F }
+impl_run_tuple! { A B C D E F G }
+impl_run_tuple! { A B C D E F G H }
+impl_run_tuple! { A B C D E F G H I }
+impl_run_tuple! { A B C D E F G H I J }
+impl_run_tuple! { A B C D E F G H I J K }
+impl_run_tuple! { A B C D E F G H I J K L }

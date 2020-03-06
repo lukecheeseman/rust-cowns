@@ -74,6 +74,15 @@ impl Phil {
     }
 }
 
+/* Rust type system prevents this, as such cowns are safe
+struct A<'a>(std::cell::RefCell<Option<&'a B>>);
+struct B;
+
+fn foo<'a, 'b: 'c, 'c>(x: &'a A<'c>, y: &'b B) {
+    *x.0.borrow_mut() = Some(y);
+}*/
+
+
 fn main() {
     /*
     // straight-forward example
@@ -124,6 +133,14 @@ fn main() {
     p3.eat();
     p4.eat();
     p5.eat();
+
+    /*
+    let a = Cown::create(A(std::cell::RefCell::new(Some(&B))));
+    let b = Cown::create(B);
+    when!(a, b).run(|a, b| {
+        *x.0.borrow_mut() = Some(y);
+    //    foo(a, b);
+    });*/
 
     // THIS WILDLY IMPORTANT FUNCTION THAT MEANS YOU EXAMPLE PROBABLY FINISHES
     end();
