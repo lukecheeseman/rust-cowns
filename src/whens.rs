@@ -1,27 +1,39 @@
 // Scheduler
 //  - set of cowns
 //  - set of pending behaviours (pairs of cowns and lambdas)
+//
+// Behaviour
+//   - Required Cowns
+//   - causally related set of behaviours
+//
+// Causally Constraint <<c
+//   - A b1,b2. b2 <<c b1 if b1 in pending b2 in b1.causally-related
+//
+// Dispatch constrained <<d
+//  - A b1,b2. b2 <<d b1 if b2 <<c b1 and b1.required subset b2.required
+//
+// scheduler
+//   findall b1 s.t. b.pending is subset of available
+//     schedule first b1 s.t. !E b2
 
 use std::thread;
-use std::collections::HashSet;
-use std::collections::VecDeque;
 use std::cell::UnsafeCell;
-use std::sync::Mutex;
-use std::sync::Arc;
+use std::collections::{HashSet, VecDeque};
+use std::sync::{Mutex, Arc};
 
 #[derive(PartialEq, Eq, Hash, Clone)]
 struct CownAddress ( *const () );
 unsafe impl Send for CownAddress {}
 unsafe impl Sync for CownAddress {}
 
-type Behaviour = Box<dyn FnOnce() + Send + 'static>;
+type BehaviourFn = Box<dyn FnOnce() + Send + 'static>;
 
-struct Pending {
+struct Behaviour {
     required: HashSet<CownAddress>,
-    behaviour: Behaviour,
+    body: BehaviourFn,
 }
-impl Pending {
-    fn new(required: &[CownAddress], behaviour: Behaviour) -> Pending {
+impl Behaviour {
+    fn new(required: &[CownAddress], body: BehaviourFn) -> Behaviour {
         let mut addresses = HashSet::new();
         for address in required.iter().cloned() {
             if addresses.contains(&address) {
@@ -29,16 +41,16 @@ impl Pending {
             }
             addresses.insert(address);
         }
-        Pending {
+        Behaviour {
             required: addresses,
-            behaviour: behaviour,
+            body: body,
         }
     }
 }
 
 struct Scheduler {
     available: HashSet<CownAddress>,
-    pending: VecDeque<Pending>,
+    pending: VecDeque<Behaviour>,
     handles: VecDeque<thread::JoinHandle<()>>,
 }
 impl Scheduler {
@@ -74,10 +86,10 @@ fn free(cowns: HashSet<CownAddress>) {
     signal();
 }
 
-fn schedule(required: &[CownAddress], behaviour: Behaviour) {
+fn schedule(required: &[CownAddress], behaviour: BehaviourFn) {
     match SCHEDULER.lock() {
         Ok(mut scheduler) => {
-            scheduler.pending.push_back(Pending::new(&required, behaviour));
+            scheduler.pending.push_back(Behaviour::new(&required, behaviour));
         }
         Err(_) => panic!("Failed to lock scheduler")
     };
@@ -97,9 +109,9 @@ fn signal() {
                                 scheduler.available.remove(addr);
                             }
                             let required = pending.required;
-                            let behaviour = pending.behaviour;
+                            let body = pending.body;
                             scheduler.handles.push_back(thread::spawn(|| { 
-                                behaviour();
+                                body();
                                 free(required);
                             }))
                         }
@@ -161,8 +173,6 @@ impl <T: Send> Cown<T> where {
         CownAddress (&*cown.resource as *const Resource<T> as *const ())
     }
 }
-unsafe impl <T> Send for Cown<T> {}
-unsafe impl <T> Sync for Cown<T> {}
 impl <T> Clone for Cown<T> {
     fn clone(&self) -> Cown<T> {
         Cown { resource: self.resource.clone() }
