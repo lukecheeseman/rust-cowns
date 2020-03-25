@@ -108,11 +108,9 @@ fn signal() {
                             for addr in &pending.required {
                                 scheduler.available.remove(addr);
                             }
-                            let required = pending.required;
-                            let body = pending.body;
-                            scheduler.handles.push_back(thread::spawn(|| { 
-                                body();
-                                free(required);
+                            scheduler.handles.push_back(thread::spawn(move || {
+                                (pending.body)();
+                                free(pending.required);
                             }))
                         }
                         None => {}
